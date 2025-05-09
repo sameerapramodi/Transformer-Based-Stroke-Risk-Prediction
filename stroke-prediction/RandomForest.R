@@ -1,125 +1,107 @@
-# Load necessary libraries
-library(randomForest)
+# 1. Install and load required libraries
+install.packages(c("e1071", "caret", "dplyr", "ggplot2", "pROC", "VIM", "ROSE", "randomForest"))
+library(e1071)
 library(caret)
 library(dplyr)
 library(ggplot2)
 library(pROC)
 library(VIM)
 library(ROSE)
-library(naniar)
-library(corrplot)
+library(randomForest)
 
-# Load dataset
+# 2. Load dataset
 stroke_data <- read.csv("C:/Users/R E V O/Downloads/stroke_prediction_dataset.csv")
 
-# Explore dataset
+# 3. Explore dataset
 str(stroke_data)
 summary(stroke_data)
 
-# Visualize missing data
-aggr(stroke_data,
-     numbers = TRUE,
-     sortVars = TRUE,
-     cex.axis = 0.7,
-     gap = 3,
-     ylab = c("Missing Data", "Pattern"))
+# 4. Identify missing values 
+cat("Total missing values:", sum(is.na(stroke_data)), "\n")
 
-# Check missing values count
-data.frame(
-  Column = colnames(stroke_data),
-  Missing_Count = colSums(is.na(stroke_data))
-)
+# 5. Remove rows with missing values
+stroke_data <- na.omit(stroke_data)
 
-# Convert categorical columns to factors
+# 6. Convert categorical columns to factors
 categorical_cols <- c("Gender", "Marital.Status", "Work.Type", "Residence.Type", 
                       "Smoking.Status", "Alcohol.Intake", "Physical.Activity", 
                       "Stroke.History", "Family.History.of.Stroke", "Dietary.Habits", 
-                      "Stress.Levels", "Blood.Pressure.Levels", "Cholesterol.Levels", 
-                      "Symptoms", "Diagnosis")
+                      "Diagnosis")  # Removed problematic columns
+
 stroke_data[categorical_cols] <- lapply(stroke_data[categorical_cols], as.factor)
 
-# Drop unnecessary columns
-stroke_data <- stroke_data %>% select(-Patient.ID, -Patient.Name)
+# 7. Extract numeric values from Blood Pressure Levels
+stroke_data$Systolic_BP <- as.numeric(sub("([0-9]+)/([0-9]+)", "\\1", stroke_data$Blood.Pressure.Levels))
+stroke_data$Diastolic_BP <- as.numeric(sub("([0-9]+)/([0-9]+)", "\\2", stroke_data$Blood.Pressure.Levels))
+stroke_data <- stroke_data %>% select(-Blood.Pressure.Levels)
 
-# ===================
-# Binning begins here
-# ===================
-
-# Convert Stress.Levels to numeric and bin
-stroke_data$Stress.Levels <- as.numeric(as.character(stroke_data$Stress.Levels))
-stroke_data$Stress.Category <- cut(stroke_data$Stress.Levels,
-                                   breaks = c(-Inf, 3.3, 6.6, Inf),
-                                   labels = c("Low", "Medium", "High"))
-
-# Extract LDL and HDL values from the Cholesterol.Levels column
+# 8. Extract numeric values from Cholesterol Levels
 stroke_data$LDL <- as.numeric(sub(".*LDL: ([0-9]+).*", "\\1", stroke_data$Cholesterol.Levels))
 stroke_data$HDL <- as.numeric(sub(".*HDL: ([0-9]+).*", "\\1", stroke_data$Cholesterol.Levels))
+stroke_data <- stroke_data %>% select(-Cholesterol.Levels)
 
-# Bin LDL values based on clinical guidelines
-stroke_data$LDL.Category <- cut(stroke_data$LDL,
-                                breaks = c(-Inf, 100, 129, 159, 189, Inf),
-                                labels = c("Optimal", "Near Optimal", "Borderline High", "High", "Very High"))
+# 9. Drop unnecessary columns
+stroke_data <- stroke_data %>% select(-Patient.ID, -Patient.Name, -Symptoms)
 
-# Bin HDL values based on clinical guidelines
-stroke_data$HDL.Category <- cut(stroke_data$HDL,
-                                breaks = c(-Inf, 39, 60, Inf),
-                                labels = c("Low", "Normal", "High"))
+# 10. Visualize class distribution
+ggplot(stroke_data, aes(x = Diagnosis, fill = Diagnosis)) +
+  geom_bar() +
+  labs(title = "Distribution of Stroke Cases", x = "Diagnosis", y = "Count") +
+  scale_fill_manual(values = c("red", "green")) +
+  theme_classic()
 
-# Combine LDL and HDL bins into one factor
-stroke_data$Cholesterol.Levels <- paste("LDL:", stroke_data$LDL.Category, "HDL:", stroke_data$HDL.Category)
-stroke_data$Cholesterol.Levels <- as.factor(stroke_data$Cholesterol.Levels)
-
-# Remove raw LDL and HDL columns if not needed
-stroke_data <- stroke_data %>% select(-LDL, -HDL)
-
-head(unique(stroke_data$Blood.Pressure.Levels), 20)
-
-
-# ===================
-# Split data
-# ===================
-
+# 11. Train-test split (80/20)
 set.seed(123)
 splitIndex <- createDataPartition(stroke_data$Diagnosis, p = 0.8, list = FALSE)
 train_data <- stroke_data[splitIndex, ]
 test_data <- stroke_data[-splitIndex, ]
 
-# Balance the training data using ROSE
+# 12. Balance training data using ROSE
 train_data_balanced <- ovun.sample(Diagnosis ~ ., data = train_data, method = "both", p = 0.5, seed = 123)$data
 
-# Convert numeric columns to numeric if stored as characters
+# 13. Standardize numeric features
 numeric_cols <- sapply(train_data_balanced, is.numeric)
-train_data_balanced[, numeric_cols] <- lapply(train_data_balanced[, numeric_cols], as.numeric)
-test_data[, numeric_cols] <- lapply(test_data[, numeric_cols], as.numeric)
-
-# Standardize numeric features
 preProcValues <- preProcess(train_data_balanced[, numeric_cols], method = c("center", "scale"))
 train_data_balanced[, numeric_cols] <- predict(preProcValues, train_data_balanced[, numeric_cols])
 test_data[, numeric_cols] <- predict(preProcValues, test_data[, numeric_cols])
 
-# Check categorical predictors with too many levels
-sapply(train_data_balanced, function(x) if(is.factor(x)) length(levels(x)) else NA)
+# 14. Check categorical variables before training
+cat("Unique categories per factor:\n")
+sapply(train_data_balanced[, sapply(train_data_balanced, is.factor)], function(x) length(unique(x)))
 
+# ------------------------
+# RANDOM FOREST MODEL
+# ------------------------
 
-
-# ===================
-# Model training
-# ===================
-
+# 15. Train Random Forest model
 set.seed(123)
 rf_model <- randomForest(Diagnosis ~ ., data = train_data_balanced, ntree = 100, importance = TRUE)
-print(rf_model)
 
-# Predict on test data
+# 16. Make predictions on the test set
 rf_predictions <- predict(rf_model, newdata = test_data)
 
-# Confusion matrix and accuracy
+# 17. Compute the confusion matrix
 rf_conf_matrix <- confusionMatrix(rf_predictions, test_data$Diagnosis)
 print(rf_conf_matrix)
-cat("✅ Random Forest Accuracy:", round(rf_conf_matrix$overall['Accuracy'] * 100, 2), "%\n")
 
-# Plot ROC curve
+# 18. Visualize Random Forest confusion matrix
+rf_conf <- as.data.frame(rf_conf_matrix$table)
+ggplot(rf_conf, aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "white") +
+  geom_text(aes(label = Freq), vjust = 1) +
+  scale_fill_gradient(low = "white", high = "darkgreen") +
+  labs(title = "Random Forest Confusion Matrix", x = "True Labels", y = "Predicted Labels") +
+  theme_minimal()
+
+# 19. ROC Curve for Random Forest
 rf_probs <- predict(rf_model, newdata = test_data, type = "prob")
-rf_roc <- roc(response = test_data$Diagnosis, predictor = rf_probs[, "Stroke"])
-plot(rf_roc, main = "Random Forest ROC Curve", col = "purple", lwd = 2)
-auc(rf_roc)
+rf_roc <- roc(response = test_data$Diagnosis, predictor = rf_probs[, 2])
+plot(rf_roc, main = "Random Forest ROC Curve", col = "darkgreen", lwd = 2)
+auc_rf <- auc(rf_roc)
+cat("Random Forest AUC:", auc_rf, "\n")
+
+# 20. Extract and print accuracy
+rf_accuracy <- rf_conf_matrix$overall['Accuracy']
+rf_accuracy_percent <- round(rf_accuracy * 100, 2)
+cat("Random Forest Accuracy:", rf_accuracy_percent, "%\n")
+
