@@ -1,2 +1,3 @@
-# stroke-prediction-R
-stroke prediction using R
+# stroke-prediction
+stroke prediction using healthcare-dataset.
+
